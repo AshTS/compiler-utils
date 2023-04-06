@@ -1,0 +1,20 @@
+[package]
+name = "compiler-utils"
+version = "0.1.0"
+edition = "2021"
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[profile.release]
+debug = true
+
+[[bench]]
+name = "parentheses"
+harness = false
+
+[[bench]]
+name = "kinda_html"
+harness = false
+
+[dependencies]
