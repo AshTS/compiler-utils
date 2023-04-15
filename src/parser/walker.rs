@@ -123,6 +123,56 @@ impl<'filedata> FileWalker<'filedata> {
             None
         }
     }
+
+    /// Get a span a certain number of lines (potentially) away from the line the span given is on
+    pub fn expand_span(&self, span: &Span, lines_away: usize) -> Span {
+        // Get the index of the span within the file
+        assert!(span.data.as_ptr() as usize >= self.all_data.as_ptr() as usize);
+        let span_byte_index = span.data.as_ptr() as usize - self.all_data.as_ptr() as usize;
+        assert!(span_byte_index <= self.all_data.len());
+
+        // We need to start counting back a number of lines... if doing so doesn't just bring us back to the beginning.
+        let start_line_number = span.location.line.max(lines_away) - lines_away;
+        
+        // We can thus construct a location at the start of that line
+        let location = Location::from_components(0, start_line_number, self.filename);
+
+        // Now, we can walk back to the index of the start of the desired line
+        let start_index = if start_line_number == 0 { 0 } else {
+            let mut lines_remaining = span.location.line - start_line_number + 1;
+            let mut current_index = span_byte_index;
+
+            while current_index > 0 {
+                current_index -= 1;
+                while current_index > 0 && !self.all_data.is_char_boundary(current_index) {}
+                if self.all_data[current_index.. current_index + 2].starts_with('\n') {
+                    lines_remaining -= 1;
+                    if lines_remaining == 0 {
+                        current_index += 1;
+                        break;
+                    }
+                }
+
+            }
+
+            current_index
+        };
+
+        // Next, we need to walk forward to find the ending index
+        let mut lines_remaining = lines_away + 1;
+        let mut current_index = span_byte_index;
+        for c in self.all_data[span_byte_index..].chars() {
+            if c == '\n' {
+                lines_remaining -= 1;
+                if lines_remaining == 0 {
+                    break;
+                }
+            }
+            current_index += c.len_utf8();
+        }
+
+        Span::from_components(location, &self.all_data[start_index..current_index])
+    }
 }
 
 #[cfg(test)]
@@ -478,5 +528,35 @@ mod test {
         assert_eq!(walker.current_location(), Location::from_components(3, 1, "hello.txt"));
         assert_eq!(walker.span_from_marker_to_here(at_unicode), Some(Span::from_components(Location::from_components(1, 0, "hello.txt"), "ö\nbi\r")));
         assert_eq!(walker.span_from_marker_to_here(later), Some(Span::from_components(Location::from_components(0, 1, "hello.txt"), "bi\r")));
+    }
+
+    #[test]
+    pub fn simple_expand_span() {
+        let mut walker = FileWalker::from_data("abc\ndef\nghi\njkl\nmno\npqr\nstu\nvwx\nyz0", "input");
+
+        let mut line_spans = Vec::new();
+
+        for (i, line) in walker.all_data.lines().enumerate() {
+            line_spans.push(Span::from_components(Location::from_components(0, i, "input"), line));
+        }
+
+        loop {
+            let marker = walker.get_marker();
+            walker.step();
+            let Some(span) = walker.span_from_marker_to_here(marker) else { break; };
+            
+            if span.data.is_empty() { break; }
+
+            for i in 0..10 {
+                let expanded = walker.expand_span(&span, i);
+                assert!(expanded.data.lines().count() <= 1 + 2 * i);
+                assert_eq!(expanded.data.lines().count(), 1 + ((span.location.line + i).min(line_spans.len() - 1)) - (span.location.line.max(i) - i));
+                
+                if i == 0 {   
+                    assert_eq!(expanded, line_spans[span.location.line]);
+                }
+            }
+            
+        }
     }
 }
